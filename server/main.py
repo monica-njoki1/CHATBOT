@@ -4,7 +4,7 @@ from flask_cors import CORS
 from ollama import chat, ChatResponse 
 
 app = Flask(__name__)
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost5173").split(",")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
 CORS(app, origins = ALLOWED_ORIGINS)
 
 MODEL = os.getenv("OLLAMA_MODEL", "llama3")
