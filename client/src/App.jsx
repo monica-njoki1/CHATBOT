@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5001/";
+const API_URL = (
+  import.meta.env.VITE_API_URL || "http://localhost:5001"
+).replace(/\/+$/, "");
 const STORAGE_KEY = "chat-history-v1";
 
 const createChat = () => ({
@@ -28,14 +30,19 @@ export default function App() {
   const bottomRef = useRef(null);
 
   const active = chats.find((c) => c.id === activeId) || chats[0];
+  const lastMessage = active.messages[active.messages.length - 1];
+  // show the typing dots only until the first word arrives
+  const waiting = loading && lastMessage?.role === "user";
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
   }, [chats]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [active.messages.length, loading, activeId]);
+    bottomRef.current?.scrollIntoView({
+      behavior: loading ? "auto" : "smooth",
+    });
+  }, [active.messages.length, lastMessage?.content, loading, activeId]);
 
   const updateChat = (id, fn) =>
     setChats((prev) => prev.map((c) => (c.id === id ? fn(c) : c)));
@@ -89,12 +96,34 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, history }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Request failed");
-      updateChat(chatId, (c) => ({
-        ...c,
-        messages: [...c.messages, { role: "assistant", content: data.reply }],
-      }));
+
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Request failed");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let reply = "";
+      let started = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        reply += decoder.decode(value, { stream: true });
+
+        const snapshot = reply;
+        const isFirst = !started;
+        started = true;
+
+        updateChat(chatId, (c) => {
+          const msgs = [...c.messages];
+          const msg = { role: "assistant", content: snapshot };
+          if (isFirst) msgs.push(msg);
+          else msgs[msgs.length - 1] = msg;
+          return { ...c, messages: msgs };
+        });
+      }
     } catch (err) {
       updateChat(chatId, (c) => ({
         ...c,
@@ -120,10 +149,10 @@ export default function App() {
   }
 
   return (
-    <div className="grid h-dvh bg-white text-black md:grid-cols-[18rem_1fr]">
+    <div className="grid h-dvh bg-black text-white md:grid-cols-[18rem_1fr]">
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-20 flex min-h-0 w-72 max-w-[85vw] flex-col gap-4 bg-black p-4 text-white transition-transform motion-reduce:transition-none md:static md:max-w-none md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-20 flex min-h-0 w-72 max-w-[85vw] flex-col gap-4 bg-black p-4 text-white transition-transform motion-reduce:transition-none md:static md:max-w-none md:translate-x-0 md:border-r md:border-sky/30 ${
           menuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -179,12 +208,20 @@ export default function App() {
       )}
 
       {/* Main */}
-      <main className="flex h-full min-h-0 min-w-0 flex-col">
-        <header className="flex items-center gap-3 border-b-[3px] border-sky px-4 py-3 md:px-6 md:py-4">
+      <main className="relative isolate flex h-full min-h-0 min-w-0 flex-col bg-black">
+        {/* Animated background */}
+        <div aria-hidden="true" className="absolute inset-0 -z-10 overflow-hidden">
+          <div className="fx-grid" />
+          <div className="fx-orb fx-orb-a" />
+          <div className="fx-orb fx-orb-b" />
+          <div className="fx-scan" />
+        </div>
+
+        <header className="flex items-center gap-3 border-b-[3px] border-sky bg-black/60 px-4 py-3 backdrop-blur md:px-6 md:py-4">
           <button
             onClick={() => setMenuOpen(true)}
             aria-label="Open chat history"
-            className="flex size-10 cursor-pointer items-center justify-center rounded-lg bg-black text-white md:hidden"
+            className="flex size-10 cursor-pointer items-center justify-center rounded-lg bg-sky text-black md:hidden"
           >
             ☰
           </button>
@@ -194,7 +231,7 @@ export default function App() {
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-3 p-4 md:p-6">
             {active.messages.length === 0 && (
-              <p className="m-auto text-muted">
+              <p className="m-auto text-neutral-400">
                 Send a message to start chatting.
               </p>
             )}
@@ -209,8 +246,8 @@ export default function App() {
                     m.role === "user"
                       ? "rounded-br-sm bg-sky text-black"
                       : m.error
-                        ? "rounded-bl-sm bg-black text-white"
-                        : "rounded-bl-sm border-[1.5px] border-black bg-white"
+                        ? "rounded-bl-sm border-[1.5px] border-sky bg-black text-white"
+                        : "rounded-bl-sm bg-white text-black"
                   }`}
                 >
                   {m.content}
@@ -218,11 +255,11 @@ export default function App() {
               </div>
             ))}
 
-            {loading && (
+            {waiting && (
               <div className="flex">
                 <div
                   aria-label="Assistant is typing"
-                  className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm border-[1.5px] border-black px-4 py-4"
+                  className="flex items-center gap-1.5 rounded-2xl rounded-bl-sm bg-white px-4 py-4"
                 >
                   {[0, 200, 400].map((delay) => (
                     <span
@@ -246,15 +283,15 @@ export default function App() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Type a message"
+            placeholder="Chat With Amok🩵"
             rows={1}
             aria-label="Message"
-            className="max-h-40 flex-1 resize-none rounded-xl border-[1.5px] border-black bg-white px-4 py-3 text-black field-sizing-content placeholder:text-muted"
+            className="max-h-40 flex-1 resize-none rounded-xl border-[1.5px] border-sky bg-black/70 px-4 py-3 text-white field-sizing-content backdrop-blur placeholder:text-neutral-400"
           />
           <button
             type="submit"
             disabled={!input.trim() || loading}
-            className="cursor-pointer rounded-xl bg-black px-5 py-3 font-bold text-sky hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-line disabled:text-muted"
+            className="cursor-pointer rounded-xl bg-sky px-5 py-3 font-bold text-black hover:bg-sky-strong disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
           >
             Send
           </button>
